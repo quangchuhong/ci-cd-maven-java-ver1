@@ -60,6 +60,7 @@ podTemplate(
   // URL HTTPS của GitOps repo
   def GITOPS_REPO_URL       = "http://gitlab.gitlabonlinecom.click/dev/test/gitops-repo-deploy-argocd-test.git"  // đổi cho đúng
   def GITOPS_CREDENTIALS_ID = "gitlab-token-dev-group"
+  def RELEASE_BRANCH        = "release/${APP_VERSION}"
 
   node('maven-pod') {
     stage('Checkout') {
@@ -306,16 +307,47 @@ podTemplate(
   stage('Manual Approval to Promote to Staging') {
     container('maven') {
       script {
-        if (branch == 'develop') {   // thay cho when { expression { ... } }
           timeout(time: 30, unit: 'MINUTES') {
-            input message: "Promote image ${IMAGE_TAG} to STAGING?", ok: "Approve"
-          }
-        } else {
-          echo "Skip manual approval, BRANCH_NAME=${env.BRANCH_NAME}"
+          input message: "Promote image ${IMAGE_TAG} to STAGING?", ok: "Approve"
         }
       }
     }
   }
+
+  stage('Create or Use Release Branch') {
+    container('maven') {
+      script {
+        withCredentials([usernamePassword(
+          credentialsId: GITOPS_CREDENTIALS_ID,
+          usernameVariable: 'GIT_USER',
+          passwordVariable: 'GIT_PASS'
+        )]) {
+          sh """
+            rm -rf app-release
+            git config --global credential.helper store
+            printf "http://${GIT_USER}:${GIT_PASS}@gitlab.gitlabonlinecom.click\n" > ~/.git-credentials
+
+            git clone ${APP_REPO_URL} app-release
+            cd app-release
+
+            # Kiểm tra branch release/${APP_VERSION} đã tồn tại trên origin chưa
+            if git ls-remote --exit-code --heads origin ${RELEASE_BRANCH} > /dev/null 2>&1; then
+              echo "[GIT] Branch ${RELEASE_BRANCH} đã tồn tại -> checkout dùng luôn"
+              git checkout ${RELEASE_BRANCH}
+              git pull origin ${RELEASE_BRANCH}
+            else
+              echo "[GIT] Branch ${RELEASE_BRANCH} chưa tồn tại -> tạo mới từ develop"
+              git checkout develop
+              git pull origin develop
+              git checkout -b ${RELEASE_BRANCH}
+              git push origin ${RELEASE_BRANCH}
+            fi
+          """
+        }
+      }
+    }
+  }
+
 
 
   }
