@@ -342,6 +342,7 @@ podTemplate(
               echo "[GIT] Branch ${RELEASE_BRANCH} đã tồn tại -> checkout dùng luôn"
               git checkout ${RELEASE_BRANCH}
               git pull origin ${RELEASE_BRANCH}
+              cd staging
 
               yq e '.image.repository = "${NEXUS_REGISTRY_PROJECT}/${APP_NAME}"' -i values.yaml
               yq e '.image.tag = "${IMAGE_TAG}"' -i values.yaml
@@ -359,7 +360,8 @@ podTemplate(
               git pull origin develop
               git checkout -b ${RELEASE_BRANCH}
               git push origin ${RELEASE_BRANCH}
-
+              cd staging
+              
               yq e '.image.repository = "${NEXUS_REGISTRY_PROJECT}/${APP_NAME}"' -i values.yaml
               yq e '.image.tag = "${IMAGE_TAG}"' -i values.yaml
 
