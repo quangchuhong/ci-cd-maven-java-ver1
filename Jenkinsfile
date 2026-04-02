@@ -361,7 +361,7 @@ podTemplate(
               git checkout -b ${RELEASE_BRANCH}
               git push origin ${RELEASE_BRANCH}
               cd staging
-              
+
               yq e '.image.repository = "${NEXUS_REGISTRY_PROJECT}/${APP_NAME}"' -i values.yaml
               yq e '.image.tag = "${IMAGE_TAG}"' -i values.yaml
 
@@ -379,7 +379,54 @@ podTemplate(
     }
   }
 
+  stage('Manual Approval to Rollback Staging') {
+    container('maven') {
+      script {
+        // Có thể thêm điều kiện, ví dụ chỉ cho rollback trên branch develop hoặc release/*
+          timeout(time: 30, unit: 'MINUTES') {
+            def doRollback = input(
+              message: "Rollback STAGING từ image ${IMAGE_TAG}? (ArgoCD sẽ quay về version trước đó)",
+              ok: "Rollback",
+              parameters: [booleanParam(name: 'CONFIRM_ROLLBACK', defaultValue: false, description: 'Tick để xác nhận rollback')]
+            )
+            if (!doRollback) {
+              echo "Rollback staging bị bỏ qua."
+            }
 
+          }
+      }
+    }
+  }
+
+  stage('Rollback GitOps Staging (Git Revert)') {
+    container('maven') {
+      script {
+        withCredentials([usernamePassword(
+          credentialsId: GITOPS_CREDENTIALS_ID,
+          usernameVariable: 'GIT_USER',
+          passwordVariable: 'GIT_PASS'
+        )]) {
+          sh """
+            rm -rf gitops-rollback
+            git config --global credential.helper store
+            printf "http://${GIT_USER}:${GIT_PASS}@gitlab.gitlabonlinecom.click\\n" > ~/.git-credentials
+
+            git clone ${GITOPS_REPO_URL} gitops-rollback
+            cd gitops-rollback
+
+            git checkout ${RELEASE_BRANCH}
+            git pull origin ${RELEASE_BRANCH}
+
+            # Revert commit cuối cùng (chính commit update IMAGE_TAG staging vừa rồi)
+            git log -1 --oneline
+            git revert --no-edit HEAD || echo "[WARN] Không revert được HEAD (có thể đã rollback)"
+
+            git push origin ${RELEASE_BRANCH}
+          """
+        }
+      }
+    }
+  }
 
   }
 }
