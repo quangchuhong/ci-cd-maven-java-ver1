@@ -27,7 +27,7 @@ podTemplate(
         envVar(key: 'MAVEN_OPTS', value: '-Dmaven.repo.local=/home/jenkins/.m2/repository')
       ]
       command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-internal.gitlabonlinecom.click --insecure-registry=docker-proxy.gitlabonlinecom.click'
+      args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
 
     ),
     containerTemplate(
@@ -36,7 +36,7 @@ podTemplate(
       command: 'cat',
       ttyEnabled: true,
       command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-internal.gitlabonlinecom.click --insecure-registry=docker-proxy.gitlabonlinecom.click'
+      args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
 
     ),
     containerTemplate(
@@ -45,7 +45,7 @@ podTemplate(
       privileged: true,
       ttyEnabled: true,
       command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-internal.gitlabonlinecom.click --insecure-registry=docker-proxy.gitlabonlinecom.click'
+      args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
 
     ),
     containerTemplate(
@@ -54,7 +54,7 @@ podTemplate(
       command: 'cat',
       ttyEnabled: true,
       command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-internal.gitlabonlinecom.click --insecure-registry=docker-proxy.gitlabonlinecom.click'
+      args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
 
 
     )
