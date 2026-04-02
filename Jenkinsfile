@@ -417,6 +417,9 @@ podTemplate(
             git checkout ${RELEASE_BRANCH}
             git pull origin ${RELEASE_BRANCH}
 
+            git config user.email "jenkins-bot@example.com"
+            git config user.name  "Jenkins Bot"
+
             # Revert commit cuối cùng (chính commit update IMAGE_TAG staging vừa rồi)
             git log -1 --oneline
             git revert --no-edit HEAD || echo "[WARN] Không revert được HEAD (có thể đã rollback)"
