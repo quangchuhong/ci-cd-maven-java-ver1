@@ -314,7 +314,7 @@ podTemplate(
     }
   }
 
-  stage('Create or Use Release Branch') {
+  stage('Create or Use Release Branch and Deploy Argocd Staging') {
     container('maven') {
       script {
         withCredentials([usernamePassword(
@@ -330,17 +330,46 @@ podTemplate(
             git clone ${GITOPS_REPO_URL} app-release
             cd app-release
 
+            # cài yq nếu chưa có
+            if ! command -v yq >/dev/null 2>&1; then
+              apt-get update -y
+              wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+              chmod +x /usr/local/bin/yq
+            fi
+
             # Kiểm tra branch release/${APP_VERSION} đã tồn tại trên origin chưa
             if git ls-remote --exit-code --heads origin ${RELEASE_BRANCH} > /dev/null 2>&1; then
               echo "[GIT] Branch ${RELEASE_BRANCH} đã tồn tại -> checkout dùng luôn"
               git checkout ${RELEASE_BRANCH}
               git pull origin ${RELEASE_BRANCH}
+
+              yq e '.image.repository = "${NEXUS_REGISTRY_PROJECT}/${APP_NAME}"' -i values.yaml
+              yq e '.image.tag = "${IMAGE_TAG}"' -i values.yaml
+
+              git config user.email "jenkins-bot@example.com"
+              git config user.name  "Jenkins Bot"
+
+              git status
+              git commit -am "Update ${APP_NAME} image tag to ${IMAGE_TAG} for staging" || echo "No changes to commit"
+              git push origin ${RELEASE_BRANCH}
+
             else
               echo "[GIT] Branch ${RELEASE_BRANCH} chưa tồn tại -> tạo mới từ develop"
               git checkout develop
               git pull origin develop
               git checkout -b ${RELEASE_BRANCH}
               git push origin ${RELEASE_BRANCH}
+
+              yq e '.image.repository = "${NEXUS_REGISTRY_PROJECT}/${APP_NAME}"' -i values.yaml
+              yq e '.image.tag = "${IMAGE_TAG}"' -i values.yaml
+
+              git config user.email "jenkins-bot@example.com"
+              git config user.name  "Jenkins Bot"
+
+              git status
+              git commit -am "Update ${APP_NAME} image tag to ${IMAGE_TAG} for staging" || echo "No changes to commit"
+              git push origin ${RELEASE_BRANCH}
+
             fi
           """
         }
