@@ -137,7 +137,7 @@ podTemplate(
             envPrefix = 'test'
           }
 
-          IMAGE_TAG      = "${envPrefix}-${GIT_SHORT_SHA}"
+          IMAGE_TAG      = "${GIT_SHORT_SHA}"
           TARFILE_NAME = "image-${APP_NAME}-${IMAGE_TAG}.tar"
         }
 
