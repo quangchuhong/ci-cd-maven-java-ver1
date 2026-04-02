@@ -168,9 +168,12 @@ podTemplate(
 
             echo "[RAW] Upload ${TARFILE_NAME} lên Nexus RAW"
             ls -lh
-            sudo curl -u "${NX_USER}:${NX_PASS}" \\
-              --upload-file ${TARFILE_NAME} \\
+            curl -v -w "\nHTTP_CODE:%{http_code}\n" \
+              -u "${NX_USER}:${NX_PASS}" \
+              --upload-file ${TARFILE_NAME} \
               "http://nexus.gitlabonlinecom.click/repository/raw-artifacts/dev-backend/docker-tar/${TARFILE_NAME}"
+
+
 
           """
           }
