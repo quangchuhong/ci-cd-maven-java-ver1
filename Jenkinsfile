@@ -304,13 +304,14 @@ podTemplate(
   }
 
   stage('Manual Approval to Promote to Staging') {
-    when {
-      expression { env.BRANCH_NAME == 'develop' }  // chỉ áp dụng trên pipeline Test
-    }
-    steps {
+    container('maven') {
       script {
-        timeout(time: 30, unit: 'MINUTES') {  // cho tối đa 30 phút để approve
-          input message: "Promote image ${IMAGE_TAG} to STAGING?", ok: "Approve"
+        if (env.BRANCH_NAME == 'develop') {   // thay cho when { expression { ... } }
+          timeout(time: 30, unit: 'MINUTES') {
+            input message: "Promote image ${IMAGE_TAG} to STAGING?", ok: "Approve"
+          }
+        } else {
+          echo "Skip manual approval, BRANCH_NAME=${env.BRANCH_NAME}"
         }
       }
     }
