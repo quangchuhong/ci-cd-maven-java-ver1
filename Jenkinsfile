@@ -9,10 +9,7 @@ podTemplate(
       resourceRequestCpu: '200m',
       resourceRequestMemory: '256Mi',
       resourceLimitCpu: '500m',
-      resourceLimitMemory: '512Mi',
-      command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
-
+      resourceLimitMemory: '512Mi'
     ),
     containerTemplate(
       name: 'maven',
