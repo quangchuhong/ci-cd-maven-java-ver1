@@ -4,7 +4,7 @@ podTemplate(
   containers: [
     containerTemplate(
       name: 'jnlp',
-      image: 'docker-proxy.gitlabonlinecom.click/library/jenkins/inbound-agent:latest-jdk17',
+      image: 'jenkins/inbound-agent:latest-jdk17',
       args: '${computer.jnlpmac} ${computer.name}',
       resourceRequestCpu: '200m',
       resourceRequestMemory: '256Mi',
@@ -13,7 +13,8 @@ podTemplate(
     ),
     containerTemplate(
       name: 'maven',
-      image: 'docker-proxy.gitlabonlinecom.click/library/maven:3.8.8-eclipse-temurin-17',
+      image: 'maven:3.8.8-eclipse-temurin-17',
+      command: 'cat',
       ttyEnabled: true,
       resourceRequestCpu: '500m',
       resourceRequestMemory: '1Gi',
@@ -21,18 +22,13 @@ podTemplate(
       resourceLimitMemory: '2Gi',
       envVars: [
         envVar(key: 'MAVEN_OPTS', value: '-Dmaven.repo.local=/home/jenkins/.m2/repository')
-      ],
-      command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
-
+      ]
     ),
     containerTemplate(
       name: 'aws',
-      image: 'docker-proxy.gitlabonlinecom.click/library/amazon/aws-cli:2.17.0', // ví dụ
-      ttyEnabled: true,
-      command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
-
+      image: 'amazon/aws-cli:2.17.0', // ví dụ
+      command: 'cat',
+      ttyEnabled: true
     ),
     containerTemplate(
       name: 'docker',
@@ -45,10 +41,10 @@ podTemplate(
     ),
     containerTemplate(
       name: 'trivy',
-      image: 'docker-proxy.gitlabonlinecom.click/library/aquasec/trivy:0.69.3',
-      ttyEnabled: true,
-      command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
+      image: 'aquasec/trivy:0.69.3',
+      command: 'cat',
+      ttyEnabled: true
+
     )
   ],
 ) {
