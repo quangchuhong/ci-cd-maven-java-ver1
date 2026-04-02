@@ -55,6 +55,7 @@ podTemplate(
 
   def NEXUS_REGISTRY   = "docker-internal.gitlabonlinecom.click"
   def IMAGE_NAME       = "dev-backend/${APP_NAME}"   // path trên nexus-hosted
+  def NEXUS_REGISTRY_PROJECT = "docker-internal.gitlabonlinecom.click/dev-backend"
 
   // URL HTTPS của GitOps repo
   def GITOPS_REPO_URL       = "http://gitlab.gitlabonlinecom.click/dev/test/gitops-repo-deploy-argocd-test.git"  // đổi cho đúng
@@ -157,10 +158,10 @@ podTemplate(
             echo "${REG_PASS}" | docker login docker-internal.gitlabonlinecom.click -u "${REG_USER}" --password-stdin
 
             # 1. Build image
-            docker build -t docker-internal.gitlabonlinecom.click/dev-backend/${APP_NAME}:${IMAGE_TAG} .
+            docker build -t ${NEXUS_REGISTRY_PROJECT}/${APP_NAME}:${IMAGE_TAG} .
 
             # 2. Save ra file TAR
-            docker save docker-internal.gitlabonlinecom.click/dev-backend/${APP_NAME}:${IMAGE_TAG} -o ${TARFILE_NAME}
+            docker save ${NEXUS_REGISTRY_PROJECT}/${APP_NAME}:${IMAGE_TAG} -o ${TARFILE_NAME}
             ls -lh ${TARFILE_NAME}
 
             docker logout docker-internal.gitlabonlinecom.click
@@ -227,10 +228,10 @@ podTemplate(
           passwordVariable: 'REG_PASS'
       )]) {
         sh """
-            echo "${REG_PASS}" | docker login docker-internal.gitlabonlinecom.click -u "${REG_USER}" --password-stdin
+            echo "${REG_PASS}" | docker login ${NEXUS_REGISTRY} -u "${REG_USER}" --password-stdin
 
-            echo "[Nexus] Push image docker-internal.gitlabonlinecom.click/dev-backend/${APP_NAME}:${IMAGE_TAG}"
-            docker push docker-internal.gitlabonlinecom.click/dev-backend/${APP_NAME}:${IMAGE_TAG}
+            echo "[Nexus] Push image ${NEXUS_REGISTRY_PROJECT}/${APP_NAME}:${IMAGE_TAG}"
+            docker push ${NEXUS_REGISTRY_PROJECT}/${APP_NAME}:${IMAGE_TAG}
 
             docker logout docker-internal.gitlabonlinecom.click
           """
@@ -287,6 +288,7 @@ podTemplate(
               chmod +x /usr/local/bin/yq
             fi
 
+            yq e '.image.repository = "${NEXUS_REGISTRY_PROJECT}/${APP_NAME}"' -i values.yaml
             yq e '.image.tag = "${IMAGE_TAG}"' -i values.yaml
 
             git config user.email "jenkins-bot@example.com"
