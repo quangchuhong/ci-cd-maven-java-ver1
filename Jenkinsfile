@@ -11,7 +11,7 @@ podTemplate(
       resourceLimitCpu: '500m',
       resourceLimitMemory: '512Mi',
       command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-internal.gitlabonlinecom.click --insecure-registry=docker-proxy.gitlabonlinecom.click'
+      args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
 
     ),
     containerTemplate(
@@ -25,7 +25,7 @@ podTemplate(
       resourceLimitMemory: '2Gi',
       envVars: [
         envVar(key: 'MAVEN_OPTS', value: '-Dmaven.repo.local=/home/jenkins/.m2/repository')
-      ]
+      ],
       command: 'dockerd-entrypoint.sh',
       args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
 
@@ -55,8 +55,6 @@ podTemplate(
       ttyEnabled: true,
       command: 'dockerd-entrypoint.sh',
       args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
-
-
     )
   ],
 ) {
