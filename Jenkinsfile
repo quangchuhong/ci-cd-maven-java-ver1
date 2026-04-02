@@ -32,11 +32,9 @@ podTemplate(
     ),
     containerTemplate(
       name: 'docker',
-      image: 'docker-proxy.gitlabonlinecom.click/library/docker:24-dind',
+      image: 'docker:24-dind',
       privileged: true,
-      ttyEnabled: true,
-      command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
+      ttyEnabled: true
 
     ),
     containerTemplate(
