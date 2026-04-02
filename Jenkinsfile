@@ -122,7 +122,7 @@ podTemplate(
       }
     }
 
-    stage('Docker Build & Upload FILE IMAGE TAR TO S3') {
+    stage('Docker Build & Upload File Image Tar on Nexus') {
       container('docker') {
         script {
           def branch = env.BRANCH_NAME ?: ''   // nếu null thì thành chuỗi rỗng
@@ -183,7 +183,7 @@ podTemplate(
       }
     }
 
-    stage('Trivy Scan Image TAR FILE') {
+    stage('Trivy Scan Image') {
       container('trivy') {
         withCredentials([usernamePassword(
           credentialsId: 'nexus-raw-creds',   // user có quyền trên raw-artifacts
@@ -219,7 +219,7 @@ podTemplate(
     }
 
     // 5. Push image lên ECR (CHỈ CHẠY nếu các stage trước SUCCESS)
-    stage('Push Docker Image to ECR') {
+    stage('Push Docker Image to nexus docker registry') {
       container('docker') {
         withCredentials([usernamePassword(
           credentialsId: 'docker-user-internal',   // user có quyền push dev-backend/*
