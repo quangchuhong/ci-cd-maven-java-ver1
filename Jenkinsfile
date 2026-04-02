@@ -238,7 +238,7 @@ podTemplate(
       }
     }
 
-  stage('Update GitOps Repo Argocd') {
+  stage('Update GitOps Repo for Argocd Test') {
     container('maven') {
       script {
 
@@ -296,6 +296,19 @@ podTemplate(
             git commit -am "Update ${APP_NAME} image tag to ${IMAGE_TAG} for ${envPath}" || echo "No changes to commit"
             git push origin ${gitTargetBranch}
           """
+        }
+      }
+    }
+  }
+
+  stage('Manual Approval to Promote to Staging') {
+    when {
+      expression { env.BRANCH_NAME == 'develop' }  // chỉ áp dụng trên pipeline Test
+    }
+    steps {
+      script {
+        timeout(time: 30, unit: 'MINUTES') {  // cho tối đa 30 phút để approve
+          input message: "Promote image ${IMAGE_TAG} to STAGING?", ok: "Approve"
         }
       }
     }
