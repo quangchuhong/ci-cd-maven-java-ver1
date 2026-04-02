@@ -4,16 +4,19 @@ podTemplate(
   containers: [
     containerTemplate(
       name: 'jnlp',
-      image: 'nexus-docker.nexus.svc.cluster.local:8002/library/jenkins/inbound-agent:latest-jdk17',
+      image: 'docker-proxy.gitlabonlinecom.click/library/jenkins/inbound-agent:latest-jdk17',
       args: '${computer.jnlpmac} ${computer.name}',
       resourceRequestCpu: '200m',
       resourceRequestMemory: '256Mi',
       resourceLimitCpu: '500m',
-      resourceLimitMemory: '512Mi'
+      resourceLimitMemory: '512Mi',
+      command: 'dockerd-entrypoint.sh',
+      args: '--insecure-registry=docker-internal.gitlabonlinecom.click --insecure-registry=docker-proxy.gitlabonlinecom.click'
+
     ),
     containerTemplate(
       name: 'maven',
-      image: 'nexus-docker.nexus.svc.cluster.local:8002/library/maven:3.8.8-eclipse-temurin-17',
+      image: 'docker-proxy.gitlabonlinecom.click/library/maven:3.8.8-eclipse-temurin-17',
       command: 'cat',
       ttyEnabled: true,
       resourceRequestCpu: '500m',
@@ -23,24 +26,36 @@ podTemplate(
       envVars: [
         envVar(key: 'MAVEN_OPTS', value: '-Dmaven.repo.local=/home/jenkins/.m2/repository')
       ]
+      command: 'dockerd-entrypoint.sh',
+      args: '--insecure-registry=docker-internal.gitlabonlinecom.click --insecure-registry=docker-proxy.gitlabonlinecom.click'
+
     ),
     containerTemplate(
       name: 'aws',
-      image: 'nexus-docker.nexus.svc.cluster.local:8002/library/amazon/aws-cli:2.17.0', // ví dụ
+      image: 'docker-proxy.gitlabonlinecom.click/library/amazon/aws-cli:2.17.0', // ví dụ
       command: 'cat',
       ttyEnabled: true,
+      command: 'dockerd-entrypoint.sh',
+      args: '--insecure-registry=docker-internal.gitlabonlinecom.click --insecure-registry=docker-proxy.gitlabonlinecom.click'
+
     ),
     containerTemplate(
       name: 'docker',
-      image: 'nexus-docker.nexus.svc.cluster.local:8002/library/docker:24-dind',
+      image: 'docker-proxy.gitlabonlinecom.click/library/docker:24-dind',
       privileged: true,
       ttyEnabled: true,
+      command: 'dockerd-entrypoint.sh',
+      args: '--insecure-registry=docker-internal.gitlabonlinecom.click --insecure-registry=docker-proxy.gitlabonlinecom.click'
+
     ),
     containerTemplate(
       name: 'trivy',
-      image: 'nexus-docker.nexus.svc.cluster.local:8002/library/aquasec/trivy:0.69.3',
+      image: 'docker-proxy.gitlabonlinecom.click/library/aquasec/trivy:0.69.3',
       command: 'cat',
       ttyEnabled: true,
+      command: 'dockerd-entrypoint.sh',
+      args: '--insecure-registry=docker-internal.gitlabonlinecom.click --insecure-registry=docker-proxy.gitlabonlinecom.click'
+
 
     )
   ],
