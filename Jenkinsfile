@@ -4,7 +4,7 @@ podTemplate(
   containers: [
     containerTemplate(
       name: 'jnlp',
-      image: 'jenkins/inbound-agent:latest-jdk17',
+      image: 'docker-proxy.gitlabonlinecom.click/library/jenkins/inbound-agent:latest-jdk17',
       args: '${computer.jnlpmac} ${computer.name}',
       resourceRequestCpu: '200m',
       resourceRequestMemory: '256Mi',
@@ -13,7 +13,7 @@ podTemplate(
     ),
     containerTemplate(
       name: 'maven',
-      image: 'maven:3.8.8-eclipse-temurin-17',
+      image: 'docker-proxy.gitlabonlinecom.click/library/maven:3.8.8-eclipse-temurin-17',
       command: 'cat',
       ttyEnabled: true,
       resourceRequestCpu: '500m',
@@ -26,36 +26,32 @@ podTemplate(
     ),
     containerTemplate(
       name: 'aws',
-      image: 'amazon/aws-cli:2.17.0', // ví dụ
+      image: 'docker-proxy.gitlabonlinecom.click/library/amazon/aws-cli:2.17.0', // ví dụ
       command: 'cat',
       ttyEnabled: true,
     ),
     containerTemplate(
       name: 'docker',
-      image: 'docker:24-dind',
+      image: 'docker-proxy.gitlabonlinecom.click/library/docker:24-dind',
       privileged: true,
       ttyEnabled: true,
     ),
     containerTemplate(
       name: 'trivy',
-      image: 'aquasec/trivy:0.69.3',
+      image: 'docker-proxy.gitlabonlinecom.click/library/aquasec/trivy:0.69.3',
       command: 'cat',
       ttyEnabled: true,
 
     )
   ],
 ) {
-  def SONARQUBE_SERVER  = "sonarqube"
+  def SONARQUBE_SERVER  = "SonarQube"
   def SONAR_PROJECT_KEY = "shopping-cart"
   def APP_VERSION       = "1.0.0"
   def APP_NAME          = "shopping-cart"
 
-  def AWS_REGION      = "ap-southeast-1"
-  def AWS_ACCOUNT_ID  = "609320954321"
-  def AWS_CREDENTIALS = "aws-secret-token"
-  def S3_BUCKET       = "s3-bucket-save-fle-tar-docker-images"
-  def ECR_REPO_NAME   = "shopping-cart"
-  def ECR_REPO        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
+  def NEXUS_REGISTRY   = "docker-internal.gitlabonlinecom.click"
+  def IMAGE_NAME       = "dev-backend/${APP_NAME}"   // path trên nexus-hosted
 
   node('maven-pod') {
     stage('Checkout') {
@@ -135,26 +131,47 @@ podTemplate(
           }
 
           IMAGE_TAG      = "${envPrefix}-${GIT_SHORT_SHA}"
-          TARFILE_NAME   = "image-${ECR_REPO_NAME}-${IMAGE_TAG}.tar"
+          TARFILE_NAME = "image-${APP_NAME}-${IMAGE_TAG}.tar"
         }
 
-        echo "[Docker] Build & Upload file tar ${TARFILE_NAME}"
+        echo "[Docker] Build & save TAR ${TARFILE_NAME}"
 
-        withAWS(region: AWS_REGION, credentials: AWS_CREDENTIALS) {
+        withCredentials([usernamePassword(
+          credentialsId: 'docker-user-internal',   // dùng luôn user docker nội bộ
+          usernameVariable: 'REG_USER',
+          passwordVariable: 'REG_PASS'
+        ),
+        usernamePassword(
+          credentialsId: 'nexus-raw-creds',
+          usernameVariable: 'NX_USER',
+          passwordVariable: 'NX_PASS'
+    )]) {
           sh """
-            # Cài aws-cli nếu chưa có (alpine base)
-            if ! command -v aws >/dev/null 2>&1; then
-              apk add --no-cache aws-cli              
+            echo "${REG_PASS}" | docker login docker-internal.gitlabonlinecom.click -u "${REG_USER}" --password-stdin
+
+            # 1. Build image
+            docker build -t docker-internal.gitlabonlinecom.click/dev-backend/${APP_NAME}:${IMAGE_TAG} .
+
+            # 2. Save ra file TAR
+            docker save docker-internal.gitlabonlinecom.click/dev-backend/${APP_NAME}:${IMAGE_TAG} -o ${TARFILE_NAME}
+            ls -lh ${TARFILE_NAME}
+
+            docker logout docker-internal.gitlabonlinecom.click
+
+            # Cài curl nếu image docker:dind không có
+            if ! command -v curl >/dev/null 2>&1; then
+              apk add --no-cache curl
             fi
 
-            docker build -t ${ECR_REPO}:${IMAGE_TAG} .
-            docker save ${ECR_REPO}:${IMAGE_TAG} -o ${TARFILE_NAME}
-            ls -lh ${TARFILE_NAME}
-            # upload to s3
-            aws s3 cp ${TARFILE_NAME} s3://${S3_BUCKET}/${TARFILE_NAME}
-          """
+            echo "[RAW] Upload ${TARFILE_NAME} lên Nexus RAW"
+            curl -u "${NX_USER}:${NX_PASS}" \\
+              --upload-file ${TARFILE_NAME} \\
+              "http://nexus.gitlabonlinecom.click/repository/raw-artifacts/dev-backend/docker-tar/${TARFILE_NAME}"
 
-        }
+          """
+          }
+
+
       }
     }
 
