@@ -306,7 +306,7 @@ podTemplate(
   stage('Manual Approval to Promote to Staging') {
     container('maven') {
       script {
-        if (env.BRANCH_NAME == 'develop') {   // thay cho when { expression { ... } }
+        if (branch == 'develop') {   // thay cho when { expression { ... } }
           timeout(time: 30, unit: 'MINUTES') {
             input message: "Promote image ${IMAGE_TAG} to STAGING?", ok: "Approve"
           }
