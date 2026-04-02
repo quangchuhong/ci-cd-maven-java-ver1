@@ -14,7 +14,6 @@ podTemplate(
     containerTemplate(
       name: 'maven',
       image: 'docker-proxy.gitlabonlinecom.click/library/maven:3.8.8-eclipse-temurin-17',
-      command: 'cat',
       ttyEnabled: true,
       resourceRequestCpu: '500m',
       resourceRequestMemory: '1Gi',
@@ -30,7 +29,6 @@ podTemplate(
     containerTemplate(
       name: 'aws',
       image: 'docker-proxy.gitlabonlinecom.click/library/amazon/aws-cli:2.17.0', // ví dụ
-      command: 'cat',
       ttyEnabled: true,
       command: 'dockerd-entrypoint.sh',
       args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
@@ -48,7 +46,6 @@ podTemplate(
     containerTemplate(
       name: 'trivy',
       image: 'docker-proxy.gitlabonlinecom.click/library/aquasec/trivy:0.69.3',
-      command: 'cat',
       ttyEnabled: true,
       command: 'dockerd-entrypoint.sh',
       args: '--insecure-registry=docker-proxy.gitlabonlinecom.click'
