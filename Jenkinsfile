@@ -34,7 +34,9 @@ podTemplate(
       name: 'docker',
       image: 'docker:24-dind',
       privileged: true,
-      ttyEnabled: true
+      ttyEnabled: true,
+      command: 'dockerd-entrypoint.sh',
+      args: '--insecure-registry=docker-internal.gitlabonlinecom.click'
 
     ),
     containerTemplate(
