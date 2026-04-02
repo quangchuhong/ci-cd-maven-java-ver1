@@ -4,7 +4,7 @@ podTemplate(
   containers: [
     containerTemplate(
       name: 'jnlp',
-      image: 'docker-proxy.gitlabonlinecom.click/library/jenkins/inbound-agent:latest-jdk17',
+      image: 'nexus-docker.nexus.svc.cluster.local:8002/library/jenkins/inbound-agent:latest-jdk17',
       args: '${computer.jnlpmac} ${computer.name}',
       resourceRequestCpu: '200m',
       resourceRequestMemory: '256Mi',
@@ -13,7 +13,7 @@ podTemplate(
     ),
     containerTemplate(
       name: 'maven',
-      image: 'docker-proxy.gitlabonlinecom.click/library/maven:3.8.8-eclipse-temurin-17',
+      image: 'nexus-docker.nexus.svc.cluster.local:8002/library/maven:3.8.8-eclipse-temurin-17',
       command: 'cat',
       ttyEnabled: true,
       resourceRequestCpu: '500m',
@@ -26,19 +26,19 @@ podTemplate(
     ),
     containerTemplate(
       name: 'aws',
-      image: 'docker-proxy.gitlabonlinecom.click/library/amazon/aws-cli:2.17.0', // ví dụ
+      image: 'nexus-docker.nexus.svc.cluster.local:8002/library/amazon/aws-cli:2.17.0', // ví dụ
       command: 'cat',
       ttyEnabled: true,
     ),
     containerTemplate(
       name: 'docker',
-      image: 'docker-proxy.gitlabonlinecom.click/library/docker:24-dind',
+      image: 'nexus-docker.nexus.svc.cluster.local:8002/library/docker:24-dind',
       privileged: true,
       ttyEnabled: true,
     ),
     containerTemplate(
       name: 'trivy',
-      image: 'docker-proxy.gitlabonlinecom.click/library/aquasec/trivy:0.69.3',
+      image: 'nexus-docker.nexus.svc.cluster.local:8002/library/aquasec/trivy:0.69.3',
       command: 'cat',
       ttyEnabled: true,
 
