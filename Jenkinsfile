@@ -57,8 +57,8 @@ podTemplate(
   def IMAGE_NAME       = "dev-backend/${APP_NAME}"   // path trên nexus-hosted
 
   // URL HTTPS của GitOps repo
-  def GITOPS_REPO_URL       = "http://gitlab.gitlabonlinecom.click/root/gitops-repo.git"  // đổi cho đúng
-  def GITOPS_CREDENTIALS_ID = "gitops-project-token"
+  def GITOPS_REPO_URL       = "http://gitlab.gitlabonlinecom.click/dev/test/gitops-repo-deploy-argocd-test.git"  // đổi cho đúng
+  def GITOPS_CREDENTIALS_ID = "gitlab-token-dev-group"
 
   node('maven-pod') {
     stage('Checkout') {
