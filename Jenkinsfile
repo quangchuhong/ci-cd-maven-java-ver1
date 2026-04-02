@@ -56,6 +56,10 @@ podTemplate(
   def NEXUS_REGISTRY   = "docker-internal.gitlabonlinecom.click"
   def IMAGE_NAME       = "dev-backend/${APP_NAME}"   // path trên nexus-hosted
 
+  // URL HTTPS của GitOps repo
+  def GITOPS_REPO_URL       = "http://gitlab.gitlabonlinecom.click/root/gitops-repo.git"  // đổi cho đúng
+  def GITOPS_CREDENTIALS_ID = "gitops-project-token"
+
   node('maven-pod') {
     stage('Checkout') {
       echo '[Checkout] Lấy source từ SCM'
@@ -172,9 +176,6 @@ podTemplate(
               -u "${NX_USER}:${NX_PASS}" \
               --upload-file ${TARFILE_NAME} \
               "http://nexus.gitlabonlinecom.click/repository/raw-artifacts/dev-backend/docker-tar/${TARFILE_NAME}"
-
-
-
           """
           }
 
@@ -184,33 +185,33 @@ podTemplate(
 
     stage('Trivy Scan Image TAR FILE') {
       container('trivy') {
-      withCredentials([[
-        $class: 'AmazonWebServicesCredentialsBinding',
-        credentialsId: AWS_CREDENTIALS
-      ]]) {
+        withCredentials([usernamePassword(
+          credentialsId: 'nexus-raw-creds',   // user có quyền trên raw-artifacts
+          usernameVariable: 'NX_USER',
+          passwordVariable: 'NX_PASS'
+      )]) {
           sh """
-            # Cài aws-cli nếu chưa có (alpine base)
-            if ! command -v aws >/dev/null 2>&1; then
-              apk add --no-cache aws-cli              
+
+            # Cài curl nếu chưa có (alpine base)
+            if ! command -v curl >/dev/null 2>&1; then
+              apk add --no-cache curl
             fi
 
-            echo "List file to S3"
-            aws s3 ls 
-            export AWS_DEFAULT_REGION=${AWS_REGION}
+            echo "[Trivy] Download TAR from Nexus RAW: ${TARFILE_NAME}"
+            curl -u "${NX_USER}:${NX_PASS}" \\
+              -o ${TARFILE_NAME} \\
+              "http://nexus.gitlabonlinecom.click/repository/raw-artifacts/dev-backend/docker-tar/${TARFILE_NAME}"
 
-            # Tải file TAR từ S3 về workspace
-            aws s3 cp s3://${S3_BUCKET}/${TARFILE_NAME} ${TARFILE_NAME}
-
-            echo "[Trivy] Scan remote image ${ECR_REPO}:${IMAGE_TAG}"
+            echo "[Trivy] Scan image TAR ${TARFILE_NAME}"
 
             # Scan LOW + MEDIUM (không fail pipeline)
-            trivy image --input ${TARFILE_NAME} \
-              --exit-code 0 \
+            trivy image --input ${TARFILE_NAME} \\
+              --exit-code 0 \\
               --severity LOW,MEDIUM
 
-            # Scan HIGH + CRITICAL (có thể fail pipeline), exit-code 1 failed, chage exit 0 de pass test
-            trivy image --input ${TARFILE_NAME} \
-              --exit-code 0 \
+            # Scan HIGH + CRITICAL (tạm để exit-code 0, đổi 1 nếu muốn fail)
+            trivy image --input ${TARFILE_NAME} \\
+              --exit-code 0 \\
               --severity HIGH,CRITICAL
           """
         }
@@ -220,23 +221,18 @@ podTemplate(
     // 5. Push image lên ECR (CHỈ CHẠY nếu các stage trước SUCCESS)
     stage('Push Docker Image to ECR') {
       container('docker') {
-        withCredentials([[
-          $class: 'AmazonWebServicesCredentialsBinding',
-          credentialsId: AWS_CREDENTIALS
-        ]]) {
-          sh """
-            export AWS_DEFAULT_REGION=${AWS_REGION}
+        withCredentials([usernamePassword(
+          credentialsId: 'docker-user-internal',   // user có quyền push dev-backend/*
+          usernameVariable: 'REG_USER',
+          passwordVariable: 'REG_PASS'
+      )]) {
+        sh """
+            echo "${REG_PASS}" | docker login docker-internal.gitlabonlinecom.click -u "${REG_USER}" --password-stdin
 
-            if ! command -v aws >/dev/null 2>&1; then
-              which apk >/dev/null 2>&1 && apk add --no-cache aws-cli || \
-              (which apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y awscli)
-            fi
+            echo "[Nexus] Push image docker-internal.gitlabonlinecom.click/dev-backend/${APP_NAME}:${IMAGE_TAG}"
+            docker push docker-internal.gitlabonlinecom.click/dev-backend/${APP_NAME}:${IMAGE_TAG}
 
-            aws ecr get-login-password --region ${AWS_REGION} | \
-              docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-
-            echo "[ECR] Push image ${ECR_REPO}:${IMAGE_TAG}"
-            docker push ${ECR_REPO}:${IMAGE_TAG}
+            docker logout docker-internal.gitlabonlinecom.click
           """
         }
       }
@@ -245,9 +241,6 @@ podTemplate(
   stage('Update GitOps Repo Argocd') {
     container('maven') {
       script {
-        // URL HTTPS của GitOps repo
-        def GITOPS_REPO_URL       = "http://gitlab.gitlabonlinecom.click/root/gitops-repo.git"  // đổi cho đúng
-        def GITOPS_CREDENTIALS_ID = "gitops-project-token"
 
         // Map branch -> folder env
         def branch = env.BRANCH_NAME ?: ''
