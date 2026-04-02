@@ -327,7 +327,7 @@ podTemplate(
             git config --global credential.helper store
             printf "http://${GIT_USER}:${GIT_PASS}@gitlab.gitlabonlinecom.click\n" > ~/.git-credentials
 
-            git clone ${APP_REPO_URL} app-release
+            git clone ${GITOPS_REPO_URL} app-release
             cd app-release
 
             # Kiểm tra branch release/${APP_VERSION} đã tồn tại trên origin chưa
