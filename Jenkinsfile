@@ -36,7 +36,8 @@ def podSpec = [
   containers: [
     containerTemplate(
       name: 'jnlp',
-      image: 'jenkins/inbound-agent:latest-jdk17',
+      // Same Java as the controller (Jenkins 2.580 runs on Java 21; a JDK 17 agent cannot load its classes)
+      image: 'jenkins/inbound-agent:3355.v388858a_47b_33-3-jdk21',
       args: '${computer.jnlpmac} ${computer.name}',
       resourceRequestCpu: '200m',
       resourceRequestMemory: '256Mi',
