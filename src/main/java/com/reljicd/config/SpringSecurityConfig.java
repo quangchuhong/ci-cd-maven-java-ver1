@@ -30,7 +30,7 @@ public class SpringSecurityConfig extends WebSecurityConfigurerAdapter {
     @Value("${spring.admin.username}")
     private String adminUsername;
 
-    @Value("${spring.admin.username}")
+    @Value("${spring.admin.password:}")
     private String adminPassword;
 
     @Value("${spring.queries.users-query}")
@@ -49,16 +49,20 @@ public class SpringSecurityConfig extends WebSecurityConfigurerAdapter {
      * HTTPSecurity configurer
      * - roles ADMIN allow to access /admin/**
      * - roles USER allow to access /user/** and /newPost/**
-     * - anybody can visit /, /home, /about, /registration, /error, /blog/**, /post/**, /h2-console/**
+     * - anybody can visit /home, /registration, /error
+     * - H2 console (only when spring.h2.console.enabled) is restricted to ADMIN
      * - every other page needs authentication
+     * - CSRF protection on; the H2 console posts without a token, so it is excluded
      * - custom 403 access denied handler
      */
     @Override
     protected void configure(HttpSecurity http) throws Exception {
 
-        http.csrf().disable()
+        http.csrf().ignoringAntMatchers("/h2-console/**")
+                .and()
                 .authorizeRequests()
-                .antMatchers("/home", "/registration", "/error", "/h2-console/**").permitAll()
+                .antMatchers("/home", "/registration", "/error").permitAll()
+                .antMatchers("/h2-console/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
                 .and()
                 .formLogin()
@@ -70,8 +74,8 @@ public class SpringSecurityConfig extends WebSecurityConfigurerAdapter {
                 .permitAll()
                 .and()
                 .exceptionHandling().accessDeniedHandler(accessDeniedHandler)
-                // Fix for H2 console
-                .and().headers().frameOptions().disable();
+                // H2 console renders in frames from the same origin
+                .and().headers().frameOptions().sameOrigin();
     }
 
 
@@ -89,9 +93,12 @@ public class SpringSecurityConfig extends WebSecurityConfigurerAdapter {
                 .dataSource(dataSource)
                 .passwordEncoder(passwordEncoder());
 
-        // In memory authentication
-        auth.inMemoryAuthentication()
-                .withUser(adminUsername).password(adminPassword).roles("ADMIN");
+        // In memory admin, only when a password is provided (ADMIN_PASSWORD)
+        if (adminPassword != null && !adminPassword.isEmpty()) {
+            auth.inMemoryAuthentication()
+                    .passwordEncoder(passwordEncoder())
+                    .withUser(adminUsername).password(passwordEncoder().encode(adminPassword)).roles("ADMIN");
+        }
     }
 
     /**

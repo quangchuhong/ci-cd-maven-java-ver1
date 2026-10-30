@@ -147,6 +147,7 @@ if (branch == 'main') {
 
 def IMAGE_TAG
 def TARFILE
+def POM_VERSION
 
 podTemplate(podSpec) {
   node(POD_LABEL) {
@@ -154,6 +155,9 @@ podTemplate(podSpec) {
       checkout scm
       IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
       TARFILE   = "image-${APP_NAME}-${IMAGE_TAG}.tar"
+      // SonarQube "New Code" = changes since the last version change, so use the pom version,
+      // not the commit (a new version per commit would make the Quality Gate check almost nothing)
+      POM_VERSION = readMavenPom(file: 'pom.xml').version
       echo "[Checkout] branch=${branch} env=${envFolder} tag=${IMAGE_TAG}"
     }
 
@@ -174,7 +178,7 @@ podTemplate(podSpec) {
             sh """
               mvn -B -s .ci-settings.xml org.sonarsource.scanner.maven:sonar-maven-plugin:5.1.0.4751:sonar \
                 -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                -Dsonar.projectVersion=${IMAGE_TAG} \
+                -Dsonar.projectVersion=${POM_VERSION} \
                 -Dsonar.java.binaries=target/classes \
                 -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
             """

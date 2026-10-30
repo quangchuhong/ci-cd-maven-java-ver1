@@ -45,7 +45,12 @@
                 </ul>
                 <!-- show sign out only if user is authenticated -->
                 <ul class="nav navbar-nav" sec:authorize="isAuthenticated()">
-                    <li class="active"><a th:href="@{/logout}">Sign Out</a></li>
+                    <li class="active">
+                        <!-- POST with the CSRF token (th:action adds it) -->
+                        <form th:action="@{/logout}" method="post" class="navbar-form">
+                            <button type="submit" class="btn btn-link">Sign Out</button>
+                        </form>
+                    </li>
                 </ul>
             </div>
         </div>

@@ -100,10 +100,27 @@ Cần JDK 8. Spring Boot 1.5 và Hibernate 5.0 không chạy được trên JDK 
 ```sh
 mvn clean verify
 docker build -t shopping-cart:local .
-docker run --rm -p 8070:8070 shopping-cart:local
+docker run --rm -p 8070:8070 -e ADMIN_PASSWORD='<mật khẩu>' shopping-cart:local
 ```
 
-Mở http://localhost:8070, đăng nhập `admin` / `admin`.
+Mở http://localhost:8070, đăng nhập `admin` với mật khẩu đã đặt trong `ADMIN_PASSWORD`, hoặc đăng ký user mới ở `/registration`.
+
+## Biến môi trường
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `ADMIN_USERNAME` | `admin` | Tên tài khoản admin (in-memory) |
+| `ADMIN_PASSWORD` | trống | Mật khẩu admin. Để trống thì **không có** tài khoản admin |
+| `H2_CONSOLE_ENABLED` | `false` | Bật H2 console tại `/h2-console` (chỉ user có role ADMIN truy cập được) |
+| `DB_PASSWORD` | trống | Mật khẩu datasource |
+
+Trên Kubernetes, `ADMIN_PASSWORD` và `DB_PASSWORD` lấy từ Secret, không ghi vào `values.yaml` của GitOps repo.
+
+## Bảo mật
+
+- CSRF bật cho mọi form (login, đăng ký, **Sign Out là form POST**). Riêng `/h2-console/**` được loại trừ vì H2 console không gửi token.
+- `X-Frame-Options: SAMEORIGIN` (H2 console dùng frame cùng origin).
+- SonarQube: `sonar.projectVersion` lấy từ `version` trong `pom.xml`, nên *New Code* là mọi thay đổi kể từ lần đổi version gần nhất, và Quality Gate *Sonar way* chặn issue mới ở phần đó.
 
 ## Hạn chế đã biết
 
