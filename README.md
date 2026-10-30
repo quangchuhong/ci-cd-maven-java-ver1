@@ -78,7 +78,7 @@ GitOps repo (`dev/test/gitops-repo-deploy-argocd-test` trên GitLab) cần có c
 
 ### Jenkins
 
-**Plugin cần có:** `kubernetes`, `workflow-aggregator`, `git`, `configuration-as-code`, `sonar`, `junit`, `gitlab-plugin`, `pipeline-stage-view`. Danh sách này nằm trong `helm-install/jenkins/jenkins/values.yaml` của repo hạ tầng.
+**Plugin:** pipeline này cần `kubernetes`, `workflow-aggregator`, `git`, `sonar`, `junit`; job multibranch dùng `gitlab-branch-source`. Danh sách đầy đủ nằm trong `helm-install/jenkins/jenkins/values.yaml` của repo hạ tầng.
 
 **Credentials** (Manage Jenkins → Credentials, loại *Username with password*, trừ SonarQube token):
 
