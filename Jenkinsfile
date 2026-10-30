@@ -175,7 +175,11 @@ podTemplate(podSpec) {
       stage('SonarQube Analysis') {
         container('maven17') {
           withSonarQubeEnv(SONARQUBE_SERVER) {
+            // The workspace was checked out by the jnlp container (uid 1000) and this container runs
+            // as root: without safe.directory git refuses the repo, SonarQube gets no blame data and
+            // treats every line as New Code.
             sh """
+              git config --global --add safe.directory "\$WORKSPACE"
               mvn -B -s .ci-settings.xml org.sonarsource.scanner.maven:sonar-maven-plugin:5.1.0.4751:sonar \
                 -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
                 -Dsonar.projectVersion=${POM_VERSION} \
