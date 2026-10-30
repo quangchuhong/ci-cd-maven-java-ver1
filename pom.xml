@@ -106,11 +106,6 @@
             <artifactId>bootstrap</artifactId>
             <version>3.3.7</version>
         </dependency>
-        <dependency>
-            <groupId>org.jacoco</groupId>
-            <artifactId>jacoco-maven-plugin</artifactId>
-            <version>0.8.6</version>
-        </dependency>
         <!-- Optional, for jQuery -->
         <dependency>
             <groupId>org.webjars</groupId>
@@ -152,12 +147,12 @@
         <repository>
           <id>maven-releases</id>
           <name>maven-releases</name>
-          <url>http://52.91.212.7:8081/repository/maven-releases/</url>
+          <url>http://nexus.nexus.svc.cluster.local:8081/repository/maven-releases/</url>
         </repository>
         <snapshotRepository>
           <id>maven-snapshots</id>
           <name>maven-snapshots</name>
-          <url>http://52.91.212.7:8081/repository/maven-snapshots//</url>
+          <url>http://nexus.nexus.svc.cluster.local:8081/repository/maven-snapshots/</url>
         </snapshotRepository>
     </distributionManagement>
 </project>

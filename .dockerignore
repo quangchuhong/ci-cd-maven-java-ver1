@@ -1,0 +1,3 @@
+# Only the built jar is needed in the image build context
+*
+!target/shopping-cart-*.jar

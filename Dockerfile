@@ -1,18 +1,17 @@
-# Use a lightweight base image with OpenJDK 8
-FROM openjdk:8u151-jdk-alpine3.7
+# Spring Boot 1.5 needs Java 8 at runtime (same as java.version in pom.xml)
+FROM eclipse-temurin:8-jre-alpine
 
-# Set a non-root user for running the application
-RUN adduser -D imagebuilder
-USER imagebuilder
+# Run the application as a non-root user
+RUN adduser -D -u 10001 appuser
 
-# Expose the port on which the application will run
-EXPOSE 8070
-
-# Copy the JAR file to the /usr/app directory
-COPY target/shopping-cart*.jar /usr/app/
-
-# Set the working directory to /usr/app
 WORKDIR /usr/app
 
-# Run the application using a non-root user
-CMD ["java", "-jar", "shopping-cart*.jar"]
+# Jar built by `mvn package` (target/shopping-cart-<version>.jar)
+COPY target/shopping-cart-*.jar app.jar
+
+USER 10001
+
+# Port of the application (server.port in application.properties)
+EXPOSE 8070
+
+ENTRYPOINT ["java", "-jar", "/usr/app/app.jar"]

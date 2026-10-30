@@ -1,6 +1,38 @@
+// CI/CD for shopping-cart (Spring Boot 1.5, Java 8) on EKS:
+// Maven build/test -> SonarQube + Quality Gate -> Nexus (jar) -> Docker image
+// -> Trivy (server mode) -> Nexus docker registry -> GitOps repo (Argo CD).
+//
+// Branch -> environment
+//   develop    -> test     (GitOps branch develop, folder test), then optional promote to staging
+//   release/*  -> staging  (GitOps branch staging, folder staging)
+//   main       -> prod     (GitOps branch main,    folder prod)
 
-podTemplate(
-  label: 'maven-pod',
+def APP_NAME          = 'shopping-cart'
+def APP_VERSION       = '1.0.0'                 // release/<APP_VERSION> branch in the GitOps repo
+
+def SONARQUBE_SERVER  = 'SonarQube'             // Manage Jenkins > System > SonarQube servers
+def SONAR_PROJECT_KEY = 'shopping-cart'
+
+// In-cluster endpoints (no ALB hop)
+def NEXUS_URL         = 'http://nexus.nexus.svc.cluster.local:8081'
+def TRIVY_SERVER      = 'http://trivy.trivy.svc.cluster.local:9090'
+
+def NEXUS_REGISTRY    = 'docker-internal.gitlabonlinecom.click'   // Nexus docker-hosted (HTTP connector 8000)
+def IMAGE_REPO        = "${NEXUS_REGISTRY}/dev-backend/${APP_NAME}"
+
+def GITOPS_REPO_URL       = 'http://gitlab.gitlabonlinecom.click/dev/test/gitops-repo-deploy-argocd-test.git'
+def GITOPS_CREDENTIALS_ID = 'gitlab-token-dev-group'
+def RELEASE_BRANCH        = "release/${APP_VERSION}"
+
+def NEXUS_CREDENTIALS_ID  = 'nexus-creds'           // read maven-public, deploy maven-snapshots/releases
+def DOCKER_CREDENTIALS_ID = 'docker-user-internal'  // push dev-backend/* on docker-hosted
+
+// '1' = fail the build on HIGH/CRITICAL findings. Spring Boot 1.5 has many, keep '0' until it is upgraded.
+def TRIVY_EXIT_CODE = '0'
+
+def YQ_VERSION = 'v4.44.3'
+
+def podSpec = [
   containers: [
     containerTemplate(
       name: 'jnlp',
@@ -12,23 +44,26 @@ podTemplate(
       resourceLimitMemory: '512Mi'
     ),
     containerTemplate(
+      // JDK 8: Spring Boot 1.5 / Hibernate 5.0 do not start on JDK 11+ (javax.xml.bind removed)
       name: 'maven',
-      image: 'maven:3.8.8-eclipse-temurin-17',
+      image: 'maven:3.9.9-eclipse-temurin-8',
       command: 'cat',
       ttyEnabled: true,
       resourceRequestCpu: '500m',
       resourceRequestMemory: '1Gi',
       resourceLimitCpu: '1000m',
-      resourceLimitMemory: '2Gi',
-      envVars: [
-        envVar(key: 'MAVEN_OPTS', value: '-Dmaven.repo.local=/home/jenkins/.m2/repository')
-      ]
+      resourceLimitMemory: '2Gi'
     ),
     containerTemplate(
-      name: 'aws',
-      image: 'amazon/aws-cli:2.17.0', // ví dụ
+      // SonarQube 2025.x needs the scanner on Java 17+ (analysis only, the build stays on JDK 8)
+      name: 'maven17',
+      image: 'maven:3.9.9-eclipse-temurin-17',
       command: 'cat',
-      ttyEnabled: true
+      ttyEnabled: true,
+      resourceRequestCpu: '500m',
+      resourceRequestMemory: '1Gi',
+      resourceLimitCpu: '1000m',
+      resourceLimitMemory: '2Gi'
     ),
     containerTemplate(
       name: 'docker',
@@ -36,76 +71,118 @@ podTemplate(
       privileged: true,
       ttyEnabled: true,
       command: 'dockerd-entrypoint.sh',
-      args: '--insecure-registry=docker-internal.gitlabonlinecom.click'
-
+      args: "--insecure-registry=${NEXUS_REGISTRY}"
     ),
     containerTemplate(
+      // Same version as the Trivy server (chart trivy 0.20.1, appVersion 0.68.2)
       name: 'trivy',
-      image: 'aquasec/trivy:0.69.3',
+      image: 'aquasec/trivy:0.68.2',
       command: 'cat',
       ttyEnabled: true
-
     )
-  ],
-) {
-  def SONARQUBE_SERVER  = "SonarQube"
-  def SONAR_PROJECT_KEY = "shopping-cart"
-  def APP_VERSION       = "1.0.0"
-  def APP_NAME          = "shopping-cart"
+  ]
+]
 
-  def NEXUS_REGISTRY   = "docker-internal.gitlabonlinecom.click"
-  def IMAGE_NAME       = "dev-backend/${APP_NAME}"   // path trên nexus-hosted
-  def NEXUS_REGISTRY_PROJECT = "docker-internal.gitlabonlinecom.click/dev-backend"
+// Maven settings without secrets: credentials come from env vars bound by withCredentials
+def MAVEN_SETTINGS = """<settings>
+  <servers>
+    <server><id>nexus</id><username>\${env.NX_USER}</username><password>\${env.NX_PASS}</password></server>
+    <server><id>maven-releases</id><username>\${env.NX_USER}</username><password>\${env.NX_PASS}</password></server>
+    <server><id>maven-snapshots</id><username>\${env.NX_USER}</username><password>\${env.NX_PASS}</password></server>
+  </servers>
+  <mirrors>
+    <mirror><id>nexus</id><mirrorOf>*</mirrorOf><url>${NEXUS_URL}/repository/maven-public/</url></mirror>
+  </mirrors>
+</settings>
+"""
 
-  // URL HTTPS của GitOps repo
-  def GITOPS_REPO_URL       = "http://gitlab.gitlabonlinecom.click/dev/test/gitops-repo-deploy-argocd-test.git"  // đổi cho đúng
-  def GITOPS_CREDENTIALS_ID = "gitlab-token-dev-group"
-  def RELEASE_BRANCH        = "release/${APP_VERSION}"
+// Clone the GitOps repo, set image repository/tag in <folder>/values.yaml, push <branch>.
+// The token is passed through a credential helper reading env vars: it never lands in a file or the log.
+def updateGitOps = { String repoUrl, String credId, String branch, String baseBranch, String folder,
+                     String imageRepo, String imageTag, String yqVersion ->
+  withCredentials([usernamePassword(credentialsId: credId, usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
+    sh """
+      set -e
+      if ! command -v yq >/dev/null 2>&1; then
+        curl -sSfL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/${yqVersion}/yq_linux_amd64
+        chmod +x /usr/local/bin/yq
+      fi
 
-  node('maven-pod') {
+      git config --global credential.helper '!f() { echo username=\$GIT_USER; echo password=\$GIT_PASS; }; f'
+      git config --global user.email 'jenkins-bot@gitlabonlinecom.click'
+      git config --global user.name  'Jenkins Bot'
+
+      rm -rf gitops-work
+      git clone ${repoUrl} gitops-work
+      cd gitops-work
+      if git ls-remote --exit-code --heads origin ${branch} >/dev/null 2>&1; then
+        git checkout ${branch}
+      else
+        echo "[GitOps] ${branch} does not exist yet, creating it from ${baseBranch}"
+        git checkout ${baseBranch}
+        git checkout -b ${branch}
+      fi
+
+      yq e '.image.repository = "${imageRepo}"' -i ${folder}/values.yaml
+      yq e '.image.tag = "${imageTag}"' -i ${folder}/values.yaml
+
+      git add ${folder}/values.yaml
+      git commit -m "Deploy ${APP_NAME} ${imageTag} to ${folder}" || echo "[GitOps] No changes to commit"
+      git push origin ${branch}
+    """
+  }
+}
+
+def branch = env.BRANCH_NAME ?: 'develop'
+def envFolder
+def gitopsBranch
+if (branch == 'main') {
+  envFolder = 'prod';    gitopsBranch = 'main'
+} else if (branch.startsWith('release/')) {
+  envFolder = 'staging'; gitopsBranch = 'staging'
+} else {
+  envFolder = 'test';    gitopsBranch = 'develop'
+}
+
+def IMAGE_TAG
+def TARFILE
+
+podTemplate(podSpec) {
+  node(POD_LABEL) {
     stage('Checkout') {
-      echo '[Checkout] Lấy source từ SCM'
       checkout scm
-      // TÍNH GIT_SHORT SAU KHI CHECKOUT
-      script {
-        try {
-          GIT_SHORT_SHA = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-        } catch (e) {
-          GIT_SHORT_SHA = env.BUILD_NUMBER
-        }
-        //TARFILE_NAME   = "image-${ECR_REPO_NAME}-${IMAGE_TAG}.tar"
-        //echo "GIT_SHORT = ${GIT_SHORT}, IMAGE_TAG = ${IMAGE_TAG}, TARFILE_NAME = ${TARFILE_NAME}"
-      }
-    }
-    
-    stage('Maven Build') {
-      container('maven') {
-        sh 'mvn -B clean compile'
-      }
+      IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+      TARFILE   = "image-${APP_NAME}-${IMAGE_TAG}.tar"
+      echo "[Checkout] branch=${branch} env=${envFolder} tag=${IMAGE_TAG}"
     }
 
-    stage('Maven Test') {
-      container('maven') {
-        sh 'mvn test -DskipTests=true'
+    withCredentials([usernamePassword(credentialsId: NEXUS_CREDENTIALS_ID, usernameVariable: 'NX_USER', passwordVariable: 'NX_PASS')]) {
+      writeFile file: '.ci-settings.xml', text: MAVEN_SETTINGS
+
+      stage('Build & Unit Test') {
+        container('maven') {
+          // verify = compile + test + package + JaCoCo report (target/site/jacoco/jacoco.xml)
+          sh 'mvn -B -s .ci-settings.xml clean verify'
+        }
+        junit 'target/surefire-reports/*.xml'
       }
-      // junit 'target/surefire-reports/*.xml'
-    }
-    
-    stage('Scan Source (SonarQube)') {
-      container('maven') {
-        withSonarQubeEnv(SONARQUBE_SERVER) {
-          sh """
-            mvn org.sonarsource.scanner.maven:sonar-maven-plugin:3.11.0.3922:sonar \
-              -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-              -Dsonar.projectVersion=${APP_NAME}-${GIT_SHORT_SHA} \
-              -Dsonar.java.binaries=.
-          """
+
+      stage('SonarQube Analysis') {
+        container('maven17') {
+          withSonarQubeEnv(SONARQUBE_SERVER) {
+            sh """
+              mvn -B -s .ci-settings.xml org.sonarsource.scanner.maven:sonar-maven-plugin:5.1.0.4751:sonar \
+                -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                -Dsonar.projectVersion=${IMAGE_TAG} \
+                -Dsonar.java.binaries=target/classes \
+                -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+            """
+          }
         }
       }
-    }
 
-    stage('Quality Gate') {
-      script {
+      stage('Quality Gate') {
+        // Needs the SonarQube webhook http://jenkins.jenkins.svc.cluster.local:8080/sonarqube-webhook/
         timeout(time: 5, unit: 'MINUTES') {
           def qg = waitForQualityGate()
           if (qg.status != 'OK') {
@@ -113,323 +190,133 @@ podTemplate(
           }
         }
       }
-    }
 
-    stage('Build Source Code') {
-      container('maven') {
-          echo 'Building Source code...'
-          // Build the source code (skipping tests)
-          sh 'mvn package -DskipTests=true'
-          sh 'ls -lh target/'
+      stage('Publish Jar to Nexus') {
+        container('maven') {
+          sh 'mvn -B -s .ci-settings.xml deploy -DskipTests'
+        }
       }
     }
 
-    stage('Docker Build & Upload File Image Tar on Nexus') {
+    stage('Docker Build') {
       container('docker') {
-        script {
-          def branch = env.BRANCH_NAME ?: ''   // nếu null thì thành chuỗi rỗng
-          def envPrefix
-          if (branch == 'develop') {
-            envPrefix = 'test'
-          } else if (branch.startsWith('release/')) {
-            envPrefix = 'stg'
-          } else if (branch == 'main') {
-            envPrefix = 'prod'
-          } else {
-            envPrefix = 'test'
-          }
-
-          IMAGE_TAG      = "${GIT_SHORT_SHA}"
-          TARFILE_NAME = "image-${APP_NAME}-${IMAGE_TAG}.tar"
-        }
-
-        echo "[Docker] Build & save TAR ${TARFILE_NAME}"
-
-        withCredentials([usernamePassword(
-          credentialsId: 'docker-user-internal',   // dùng luôn user docker nội bộ
-          usernameVariable: 'REG_USER',
-          passwordVariable: 'REG_PASS'
-        ),
-        usernamePassword(
-          credentialsId: 'nexus-raw-creds',
-          usernameVariable: 'NX_USER',
-          passwordVariable: 'NX_PASS'
-    )]) {
-          sh """
-            echo "${REG_PASS}" | docker login docker-internal.gitlabonlinecom.click -u "${REG_USER}" --password-stdin
-
-            # 1. Build image
-            docker build -t ${NEXUS_REGISTRY_PROJECT}/${APP_NAME}:${IMAGE_TAG} .
-
-            # 2. Save ra file TAR
-            docker save ${NEXUS_REGISTRY_PROJECT}/${APP_NAME}:${IMAGE_TAG} -o ${TARFILE_NAME}
-            ls -lh ${TARFILE_NAME}
-
-            docker logout docker-internal.gitlabonlinecom.click
-
-            # Cài curl nếu image docker:dind không có
-            if ! command -v curl >/dev/null 2>&1; then
-              apk add --no-cache curl
-            fi
-
-            echo "[RAW] Upload ${TARFILE_NAME} lên Nexus RAW"
-            ls -lh
-            curl -v -w "\nHTTP_CODE:%{http_code}\n" \
-              -u "${NX_USER}:${NX_PASS}" \
-              --upload-file ${TARFILE_NAME} \
-              "http://nexus.gitlabonlinecom.click/repository/raw-artifacts/dev-backend/docker-tar/${TARFILE_NAME}"
-          """
-          }
-
-
+        sh """
+          timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 2; done'
+          docker build -t ${IMAGE_REPO}:${IMAGE_TAG} .
+          docker save ${IMAGE_REPO}:${IMAGE_TAG} -o ${TARFILE}
+          ls -lh ${TARFILE}
+        """
       }
     }
 
     stage('Trivy Scan Image') {
+      // The workspace is shared by all containers of the pod: scan the tar directly
       container('trivy') {
-        withCredentials([usernamePassword(
-          credentialsId: 'nexus-raw-creds',   // user có quyền trên raw-artifacts
-          usernameVariable: 'NX_USER',
-          passwordVariable: 'NX_PASS'
-      )]) {
-          sh """
-
-            # Cài curl nếu chưa có (alpine base)
-            if ! command -v curl >/dev/null 2>&1; then
-              apk add --no-cache curl
-            fi
-
-            echo "[Trivy] Download TAR from Nexus RAW: ${TARFILE_NAME}"
-            curl -u "${NX_USER}:${NX_PASS}" \\
-              -o ${TARFILE_NAME} \\
-              "http://nexus.gitlabonlinecom.click/repository/raw-artifacts/dev-backend/docker-tar/${TARFILE_NAME}"
-
-            echo "[Trivy] Scan image TAR ${TARFILE_NAME}"
-
-            # Scan LOW + MEDIUM (không fail pipeline)
-            trivy image --input ${TARFILE_NAME} \\
-              --exit-code 0 \\
-              --severity LOW,MEDIUM
-
-            # Scan HIGH + CRITICAL (tạm để exit-code 0, đổi 1 nếu muốn fail)
-            trivy image --input ${TARFILE_NAME} \\
-              --exit-code 0 \\
-              --severity HIGH,CRITICAL
-          """
-        }
-      }
-    }
-
-    // 5. Push image lên ECR (CHỈ CHẠY nếu các stage trước SUCCESS)
-    stage('Push Docker Image to nexus docker registry') {
-      container('docker') {
-        withCredentials([usernamePassword(
-          credentialsId: 'docker-user-internal',   // user có quyền push dev-backend/*
-          usernameVariable: 'REG_USER',
-          passwordVariable: 'REG_PASS'
-      )]) {
         sh """
-            echo "${REG_PASS}" | docker login ${NEXUS_REGISTRY} -u "${REG_USER}" --password-stdin
-
-            echo "[Nexus] Push image ${NEXUS_REGISTRY_PROJECT}/${APP_NAME}:${IMAGE_TAG}"
-            docker push ${NEXUS_REGISTRY_PROJECT}/${APP_NAME}:${IMAGE_TAG}
-
-            docker logout docker-internal.gitlabonlinecom.click
-          """
-        }
+          trivy image --server ${TRIVY_SERVER} --input ${TARFILE} \
+            --severity LOW,MEDIUM --exit-code 0 --no-progress
+          trivy image --server ${TRIVY_SERVER} --input ${TARFILE} \
+            --severity HIGH,CRITICAL --exit-code ${TRIVY_EXIT_CODE} --no-progress
+        """
       }
     }
 
-  stage('Update GitOps Repo for Argocd Test') {
-    container('maven') {
-      script {
-
-        // Map branch -> folder env
-        def branch = env.BRANCH_NAME ?: ''
-        def envPath
-        def gitTargetBranch
-
-        if (branch == 'develop') {
-          envPath = 'test'
-          gitTargetBranch = 'develop' 
-        } else if (branch.startsWith('release/')) {
-          envPath = 'staging'
-          gitTargetBranch = 'staging' 
-        } else if (branch == 'main') {
-          envPath = 'prod'
-          gitTargetBranch = 'main'
-        } else {
-          envPath = 'test'
-          gitTargetBranch = 'develop' 
-        }
-
-        echo "[GitOps] Update ${envPath}/values.yaml với image tag: ${IMAGE_TAG}"
-
-        withCredentials([usernamePassword(
-          credentialsId: GITOPS_CREDENTIALS_ID,
-          usernameVariable: 'GIT_USER',
-          passwordVariable: 'GIT_PASS'
-        )]) {
+    stage('Push Image to Nexus') {
+      container('docker') {
+        withCredentials([usernamePassword(credentialsId: DOCKER_CREDENTIALS_ID, usernameVariable: 'REG_USER', passwordVariable: 'REG_PASS')]) {
           sh """
-            mkdir -p gitops-work
-            cd gitops-work
-
-            # clone với user + token
-            git config --global credential.helper store
-            printf "http://${GIT_USER}:${GIT_PASS}@${GITOPS_REPO_URL.replace('http://','')}\n" > ~/.git-credentials
-
-            git clone ${GITOPS_REPO_URL} .
-            git checkout ${gitTargetBranch} || git checkout -b ${gitTargetBranch}
-            cd ${envPath}
-
-            # cài yq nếu chưa có
-            if ! command -v yq >/dev/null 2>&1; then
-              apt-get update -y
-              wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-              chmod +x /usr/local/bin/yq
-            fi
-
-            yq e '.image.repository = "${NEXUS_REGISTRY_PROJECT}/${APP_NAME}"' -i values.yaml
-            yq e '.image.tag = "${IMAGE_TAG}"' -i values.yaml
-
-            git config user.email "jenkins-bot@example.com"
-            git config user.name  "Jenkins Bot"
-
-            git status
-            git commit -am "Update ${APP_NAME} image tag to ${IMAGE_TAG} for ${envPath}" || echo "No changes to commit"
-            git push origin ${gitTargetBranch}
+            echo "\$REG_PASS" | docker login ${NEXUS_REGISTRY} -u "\$REG_USER" --password-stdin
+            docker push ${IMAGE_REPO}:${IMAGE_TAG}
+            docker logout ${NEXUS_REGISTRY}
           """
         }
       }
     }
-  }
 
-  stage('Manual Approval to Promote to Staging') {
-    container('maven') {
-      script {
-          timeout(time: 30, unit: 'MINUTES') {
-          input message: "Promote image ${IMAGE_TAG} to STAGING?", ok: "Approve"
-        }
+    stage("Update GitOps (${envFolder})") {
+      container('maven') {
+        updateGitOps(GITOPS_REPO_URL, GITOPS_CREDENTIALS_ID, gitopsBranch, gitopsBranch, envFolder,
+                     IMAGE_REPO, IMAGE_TAG, YQ_VERSION)
       }
     }
   }
+}
 
-  stage('Create or Use Release Branch and Deploy Argocd Staging') {
-    container('maven') {
-      script {
-        withCredentials([usernamePassword(
-          credentialsId: GITOPS_CREDENTIALS_ID,
-          usernameVariable: 'GIT_USER',
-          passwordVariable: 'GIT_PASS'
-        )]) {
-          sh """
-            rm -rf app-release
-            git config --global credential.helper store
-            printf "http://${GIT_USER}:${GIT_PASS}@gitlab.gitlabonlinecom.click\n" > ~/.git-credentials
-
-            git clone ${GITOPS_REPO_URL} app-release
-            cd app-release
-
-            # cài yq nếu chưa có
-            if ! command -v yq >/dev/null 2>&1; then
-              apt-get update -y
-              wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-              chmod +x /usr/local/bin/yq
-            fi
-
-            # Kiểm tra branch release/${APP_VERSION} đã tồn tại trên origin chưa
-            if git ls-remote --exit-code --heads origin ${RELEASE_BRANCH} > /dev/null 2>&1; then
-              echo "[GIT] Branch ${RELEASE_BRANCH} đã tồn tại -> checkout dùng luôn"
-              git checkout ${RELEASE_BRANCH}
-              git pull origin ${RELEASE_BRANCH}
-              cd staging
-
-              yq e '.image.repository = "${NEXUS_REGISTRY_PROJECT}/${APP_NAME}"' -i values.yaml
-              yq e '.image.tag = "${IMAGE_TAG}"' -i values.yaml
-
-              git config user.email "jenkins-bot@example.com"
-              git config user.name  "Jenkins Bot"
-
-              git status
-              git commit -am "Update ${APP_NAME} image tag to ${IMAGE_TAG} for staging" || echo "No changes to commit"
-              git push origin ${RELEASE_BRANCH}
-
-            else
-              echo "[GIT] Branch ${RELEASE_BRANCH} chưa tồn tại -> tạo mới từ develop"
-              git checkout develop
-              git pull origin develop
-              git checkout -b ${RELEASE_BRANCH}
-              git push origin ${RELEASE_BRANCH}
-              cd staging
-
-              yq e '.image.repository = "${NEXUS_REGISTRY_PROJECT}/${APP_NAME}"' -i values.yaml
-              yq e '.image.tag = "${IMAGE_TAG}"' -i values.yaml
-
-              git config user.email "jenkins-bot@example.com"
-              git config user.name  "Jenkins Bot"
-
-              git status
-              git commit -am "Update ${APP_NAME} image tag to ${IMAGE_TAG} for staging" || echo "No changes to commit"
-              git push origin ${RELEASE_BRANCH}
-
-            fi
-          """
-        }
+// Promotion test -> staging only for develop builds.
+// The approvals run outside of any node, so no agent pod is held while waiting.
+if (envFolder == 'test') {
+  def promote = false
+  stage('Approve Promote to Staging') {
+    try {
+      timeout(time: 30, unit: 'MINUTES') {
+        input message: "Promote ${APP_NAME}:${IMAGE_TAG} to STAGING (${RELEASE_BRANCH})?", ok: 'Promote'
       }
+      promote = true
+    } catch (err) {
+      echo "[Promote] Not approved (${err}), staging unchanged."
     }
   }
 
-  stage('Manual Approval to Rollback Staging') {
-    container('maven') {
-      script {
-        // Có thể thêm điều kiện, ví dụ chỉ cho rollback trên branch develop hoặc release/*
-          timeout(time: 30, unit: 'MINUTES') {
-            def doRollback = input(
-              message: "Rollback STAGING từ image ${IMAGE_TAG}? (ArgoCD sẽ quay về version trước đó)",
-              ok: "Rollback",
-              parameters: [booleanParam(name: 'CONFIRM_ROLLBACK', defaultValue: false, description: 'Tick để xác nhận rollback')]
-            )
-            if (!doRollback) {
-              echo "Rollback staging bị bỏ qua."
-            }
-
+  if (promote) {
+    podTemplate(podSpec) {
+      node(POD_LABEL) {
+        stage('Deploy Staging (GitOps)') {
+          container('maven') {
+            updateGitOps(GITOPS_REPO_URL, GITOPS_CREDENTIALS_ID, RELEASE_BRANCH, 'develop', 'staging',
+                         IMAGE_REPO, IMAGE_TAG, YQ_VERSION)
           }
-      }
-    }
-  }
-
-  stage('Rollback GitOps Staging (Git Revert)') {
-    container('maven') {
-      script {
-        withCredentials([usernamePassword(
-          credentialsId: GITOPS_CREDENTIALS_ID,
-          usernameVariable: 'GIT_USER',
-          passwordVariable: 'GIT_PASS'
-        )]) {
-          sh """
-            rm -rf gitops-rollback
-            git config --global credential.helper store
-            printf "http://${GIT_USER}:${GIT_PASS}@gitlab.gitlabonlinecom.click\\n" > ~/.git-credentials
-
-            git clone ${GITOPS_REPO_URL} gitops-rollback
-            cd gitops-rollback
-
-            git checkout ${RELEASE_BRANCH}
-            git pull origin ${RELEASE_BRANCH}
-
-            git config user.email "jenkins-bot@example.com"
-            git config user.name  "Jenkins Bot"
-
-            # Revert commit cuối cùng (chính commit update IMAGE_TAG staging vừa rồi)
-            git log -1 --oneline
-            git revert --no-edit HEAD || echo "[WARN] Không revert được HEAD (có thể đã rollback)"
-
-            git push origin ${RELEASE_BRANCH}
-          """
         }
       }
     }
-  }
 
+    def rollback = false
+    stage('Approve Rollback Staging') {
+      try {
+        timeout(time: 30, unit: 'MINUTES') {
+          rollback = input(
+            message: "Rollback STAGING from ${APP_NAME}:${IMAGE_TAG}? (Argo CD returns to the previous version)",
+            ok: 'Submit',
+            parameters: [booleanParam(name: 'CONFIRM_ROLLBACK', defaultValue: false, description: 'Tick to confirm the rollback')]
+          )
+        }
+      } catch (err) {
+        echo "[Rollback] No answer (${err}), keeping ${IMAGE_TAG} on staging."
+      }
+    }
+
+    if (rollback) {
+      podTemplate(podSpec) {
+        node(POD_LABEL) {
+          stage('Rollback Staging (git revert)') {
+            container('maven') {
+              withCredentials([usernamePassword(credentialsId: GITOPS_CREDENTIALS_ID, usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
+                sh """
+                  set -e
+                  git config --global credential.helper '!f() { echo username=\$GIT_USER; echo password=\$GIT_PASS; }; f'
+                  git config --global user.email 'jenkins-bot@gitlabonlinecom.click'
+                  git config --global user.name  'Jenkins Bot'
+
+                  rm -rf gitops-rollback
+                  git clone --branch ${RELEASE_BRANCH} ${GITOPS_REPO_URL} gitops-rollback
+                  cd gitops-rollback
+
+                  # Revert only if HEAD is the deploy commit of this build
+                  if git log -1 --format=%s | grep -q "Deploy ${APP_NAME} ${IMAGE_TAG} to staging"; then
+                    git revert --no-edit HEAD
+                    git push origin ${RELEASE_BRANCH}
+                  else
+                    echo "[Rollback] HEAD is not the deploy commit of ${IMAGE_TAG}, nothing reverted:"
+                    git log -1 --oneline
+                    exit 1
+                  fi
+                """
+              }
+            }
+          }
+        }
+      }
+    } else {
+      echo '[Rollback] Not requested.'
+    }
   }
 }
