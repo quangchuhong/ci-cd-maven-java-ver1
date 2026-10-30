@@ -43,6 +43,17 @@ properties([
 ])
 
 def podSpec = [
+  // Build pods run on the tainted CI node group (terraform-eks-devops-tools eks.tf: ci_agents),
+  // away from GitLab, Nexus, SonarQube and the Jenkins controller
+  nodeSelector: 'workload=ci-agents',
+  yaml: '''
+spec:
+  tolerations:
+    - key: workload
+      operator: Equal
+      value: ci-agents
+      effect: NoSchedule
+''',
   containers: [
     containerTemplate(
       name: 'jnlp',
