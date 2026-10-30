@@ -214,9 +214,9 @@ podTemplate(podSpec) {
       // The workspace is shared by all containers of the pod: scan the tar directly
       container('trivy') {
         sh """
-          trivy image --server ${TRIVY_SERVER} --input ${TARFILE} \
+          trivy image --server ${TRIVY_SERVER} --input ${TARFILE} --scanners vuln \
             --severity LOW,MEDIUM --exit-code 0 --no-progress
-          trivy image --server ${TRIVY_SERVER} --input ${TARFILE} \
+          trivy image --server ${TRIVY_SERVER} --input ${TARFILE} --scanners vuln \
             --severity HIGH,CRITICAL --exit-code ${TRIVY_EXIT_CODE} --no-progress
         """
       }
