@@ -4,6 +4,8 @@ Pipeline Jenkins cho ứng dụng **shopping-cart** (Spring Boot 1.5, Java 8): b
 
 Toàn bộ DevOps tool chạy trên cụm EKS `eks-cluster-ver1`, được dựng từ repo hạ tầng [`terraform-eks-devops-tools`](https://github.com/quangchuhong/terraform-eks-devops-tools). Cách cài từng tool xem `helm-install/README.md` trong repo đó.
 
+**Tài liệu chi tiết phần CI** (stage, pod agent, credentials, Quality Gate, Trivy, sự cố đã gặp): [docs/CI-pipeline.md](docs/CI-pipeline.md).
+
 ## Luồng pipeline
 
 ```mermaid
@@ -37,6 +39,8 @@ flowchart LR
 | 13 | Rollback Staging | `maven` | Chỉ chạy khi đã tick. `git revert` commit deploy của chính build này |
 
 Các container trong một agent pod dùng chung workspace, nên Trivy quét trực tiếp file tar mà container `docker` vừa tạo. Không cần upload tar lên Nexus rồi tải về.
+
+> **CD đang tạm dừng:** `GITOPS_ENABLED = false` trong Jenkinsfile, nên các stage 9–13 (GitOps, promote, rollback) được bỏ qua và pipeline kết thúc sau khi push image lên Nexus.
 
 ## Nhánh và môi trường
 

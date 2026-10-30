@@ -32,6 +32,16 @@ def TRIVY_EXIT_CODE = '0'
 
 def YQ_VERSION = 'v4.44.3'
 
+// CD (GitOps repo + Argo CD) is not set up yet: skip the GitOps update, promotion and rollback.
+// Set to true once the GitOps repo has its chart and values.
+def GITOPS_ENABLED = false
+
+properties([
+  // One build per branch at a time: two builds must not race on the GitOps repo or the image tag
+  disableConcurrentBuilds(),
+  buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+])
+
 def podSpec = [
   containers: [
     containerTemplate(
@@ -222,12 +232,16 @@ podTemplate(podSpec) {
       // The workspace is shared by all containers of the pod: scan the tar directly
       container('trivy') {
         sh """
+          # Full report (all severities) kept as build artifacts
           trivy image --server ${TRIVY_SERVER} --input ${TARFILE} --scanners vuln \
-            --severity LOW,MEDIUM --exit-code 0 --no-progress
+            --format json --output trivy-report.json --no-progress
+          trivy convert --format table --output trivy-report.txt trivy-report.json
+          # Gate: HIGH/CRITICAL table in the log, exit code TRIVY_EXIT_CODE when any is found
           trivy image --server ${TRIVY_SERVER} --input ${TARFILE} --scanners vuln \
             --severity HIGH,CRITICAL --exit-code ${TRIVY_EXIT_CODE} --no-progress
         """
       }
+      archiveArtifacts artifacts: 'trivy-report.json,trivy-report.txt', allowEmptyArchive: true
     }
 
     stage('Push Image to Nexus') {
@@ -243,6 +257,10 @@ podTemplate(podSpec) {
     }
 
     stage("Update GitOps (${envFolder})") {
+      if (!GITOPS_ENABLED) {
+        echo "[GitOps] GITOPS_ENABLED = false: skipped. Image ${IMAGE_REPO}:${IMAGE_TAG} is in Nexus."
+        return
+      }
       container('maven') {
         updateGitOps(GITOPS_REPO_URL, GITOPS_CREDENTIALS_ID, gitopsBranch, gitopsBranch, envFolder,
                      IMAGE_REPO, IMAGE_TAG, YQ_VERSION)
@@ -253,7 +271,7 @@ podTemplate(podSpec) {
 
 // Promotion test -> staging only for develop builds.
 // The approvals run outside of any node, so no agent pod is held while waiting.
-if (envFolder == 'test') {
+if (GITOPS_ENABLED && envFolder == 'test') {
   def promote = false
   stage('Approve Promote to Staging') {
     try {
