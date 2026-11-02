@@ -6,6 +6,8 @@ Tài liệu mô tả phần **CI** (build → kiểm tra chất lượng → qu�
 - Pipeline: [`Jenkinsfile`](../Jenkinsfile)
 - Hạ tầng (Terraform, Helm): [`quangchuhong/terraform-eks-devops-tools`](https://github.com/quangchuhong/terraform-eks-devops-tools)
 
+> **Cập nhật:** từ nhánh `develop`, `Jenkinsfile` dùng Shared Library `ci-lib@v1.1.0` (`mavenPipeline`). Các mục mô tả Jenkinsfile cũ dưới đây (stage, `TRIVY_EXIT_CODE`, tag image `<git-sha-7>`, `0.0.1-SNAPSHOT`) là của pipeline trước khi chuyển; bản cũ được giữ ở nhánh `archive/legacy-pipeline`. Quy trình nhánh, version và lệnh từng bước hiện hành: [branch-workflow.md](branch-workflow.md).
+
 ---
 
 ## 1. Kiến trúc
