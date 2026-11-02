@@ -1,0 +1,224 @@
+# GitLab CI for shopping-cart (Maven, Java 8) on the platform runner (Kubernetes executor, tags eks/k8s).
+# Same flow and branch model as the Jenkins Shared Library ci-lib (docs/jenkins/09):
+#   version check -> build & test -> SonarQube (+ Quality Gate) -> image build -> Trivy -> publish jar -> push image
+# Publish and push only on main, develop, release/*, hotfix/*, after every gate passed.
+# Guide (Vietnamese): docs/gitlab/10-gitlab-ci.md (10.11: running it in a test project)
+#
+# CI/CD variables (Settings > CI/CD > Variables), never in this file:
+#   NX_USER / NX_PASS               Nexus read user (masked, not protected)
+#   NX_DEPLOY_USER / NX_DEPLOY_PASS Nexus deploy/push user (masked, protected)
+#   SONAR_TOKEN                     SonarQube token (masked); without it the SonarQube job is skipped
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+stages:
+  - check
+  - build
+  - quality
+  - image
+  - scan
+  - publish
+
+variables:
+  NEXUS_URL: http://nexus.nexus.svc.cluster.local:8081
+  REGISTRY: docker-internal.gitlabonlinecom.click
+  # Test project: own image name and Sonar project so results never mix with the Jenkins pipeline
+  IMAGE_NAME: $REGISTRY/dev-backend/shopping-cart-gitlab
+  SONAR_PROJECT_KEY: shopping-cart-gitlab
+  # "true" to deploy the jar to Nexus. Off in the test project: Jenkins already publishes the same
+  # Maven coordinates, and maven-releases refuses a version deployed twice.
+  PUBLISH_JAR: "false"
+  # Same dated waiver as the Jenkinsfile: HIGH/CRITICAL findings make the job a warning until this date,
+  # except on main, hotfix/* and merge requests into main
+  TRIVY_WAIVER_UNTIL: "2026-12-31"
+  TRIVY_SERVER: http://trivy.trivy.svc.cluster.local:9090
+  SONAR_HOST_URL: http://sonarqube-sonarqube.sonarqube.svc.cluster.local:9000
+  MAVEN_OPTS: -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository
+  MAVEN_CLI: -B -s .gitlab/ci/maven-settings.xml
+
+default:
+  tags: [eks, k8s]
+  interruptible: true
+  retry:
+    max: 1
+    when: [runner_system_failure, stuck_or_timeout_failure, scheduler_failure]
+
+.skip_final_on_release: &skip_final_on_release |
+  case "$CI_COMMIT_BRANCH" in
+    release/*|hotfix/*)
+      if echo "$APP_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "$APP_VERSION is a final version: verified here, published from main after the merge"; exit 0
+      fi ;;
+  esac
+
+.protected_branches:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_BRANCH =~ /^(release|hotfix)\//
+
+.maven:
+  image: maven:3.9.9-eclipse-temurin-8
+  cache:
+    key:
+      files: [pom.xml]
+    paths: [.m2/repository]
+  before_script:
+    - export APP_VERSION=$(mvn $MAVEN_CLI -q help:evaluate -Dexpression=project.version -DforceStdout)
+    - echo "APP_VERSION=$APP_VERSION"
+
+version:check:
+  stage: check
+  extends: .maven
+  script:
+    - |
+      SRC="${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:-$CI_COMMIT_BRANCH}"
+      TGT="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-}"
+      fail() { echo "version $APP_VERSION not allowed on $SRC: $1"; exit 1; }
+      case "$SRC" in
+        main) echo "$APP_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || fail "main uses x.y.z" ;;
+        release/*|hotfix/*) echo "$APP_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' || fail "use x.y.z-rc.N or x.y.z" ;;
+        *) case "$APP_VERSION" in *-SNAPSHOT) ;; *) fail "use x.y.z-SNAPSHOT" ;; esac ;;
+      esac
+      if [ "$TGT" = "main" ]; then
+        case "$SRC" in release/*|hotfix/*) ;; *) echo "MR into main only from release/* or hotfix/*"; exit 1 ;; esac
+        echo "$APP_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || fail "merge into main needs x.y.z"
+      fi
+      echo "IMAGE_TAG=${APP_VERSION}-${CI_COMMIT_SHORT_SHA}" > build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+
+build:test:
+  stage: build
+  extends: .maven
+  needs: [version:check]
+  script:
+    - mvn $MAVEN_CLI clean verify
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - target/*.jar
+      - target/site/jacoco/jacoco.xml
+      - target/classes
+    reports:
+      junit: target/surefire-reports/*.xml
+
+sonarqube:
+  stage: quality
+  rules:
+    - if: $SONAR_TOKEN
+  image: maven:3.9.9-eclipse-temurin-17
+  cache:
+    key:
+      files: [pom.xml]
+    paths: [.m2/repository]
+    policy: pull
+  needs: [version:check, build:test]
+  script:
+    - >
+      mvn $MAVEN_CLI org.sonarsource.scanner.maven:sonar-maven-plugin:5.1.0.4751:sonar
+      -Dsonar.projectKey=$SONAR_PROJECT_KEY
+      -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+      -Dsonar.qualitygate.wait=true
+      -Dsonar.qualitygate.timeout=300
+
+image:build:
+  stage: image
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  needs: [version:check, build:test]
+  script:
+    - >
+      /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+      --destination "$IMAGE_NAME:$IMAGE_TAG"
+      --label org.opencontainers.image.revision=$CI_COMMIT_SHA
+      --label org.opencontainers.image.source=$CI_PROJECT_URL
+      --no-push
+      --tar-path image.tar
+  artifacts:
+    expire_in: 1 day
+    paths: [image.tar]
+
+trivy:scan:
+  stage: scan
+  image:
+    name: aquasec/trivy:0.68.2
+    entrypoint: [""]
+  needs: [version:check, image:build]
+  script:
+    - trivy image --server "$TRIVY_SERVER" --input image.tar --scanners vuln --format json --output trivy-report.json --no-progress
+    - trivy image --server "$TRIVY_SERVER" --input image.tar --format cyclonedx --output sbom.cdx.json --no-progress
+    - |
+      set +e
+      trivy image --server "$TRIVY_SERVER" --input image.tar --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --no-progress
+      rc=$?
+      set -e
+      if [ "$rc" -ne 0 ]; then
+        waiver_ok=yes
+        case "${CI_COMMIT_BRANCH:-}" in main|hotfix/*) waiver_ok=no ;; esac
+        [ "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-}" = "main" ] && waiver_ok=no
+        today=$(date +%Y%m%d)
+        until=$(echo "${TRIVY_WAIVER_UNTIL:-0}" | tr -d '-')
+        if [ "$waiver_ok" = yes ] && [ "$today" -le "$until" ]; then
+          echo "Trivy: HIGH/CRITICAL accepted by waiver until $TRIVY_WAIVER_UNTIL (job marked as warning)"
+          exit 42
+        fi
+        echo "Trivy: HIGH/CRITICAL vulnerabilities found (see trivy-report.json)"
+        exit 1
+      fi
+  allow_failure:
+    exit_codes: [42]
+  artifacts:
+    when: always
+    expire_in: 90 days
+    paths: [trivy-report.json, sbom.cdx.json]
+
+publish:jar:
+  stage: publish
+  extends: .maven
+  needs:
+    - version:check
+    - build:test
+    - job: sonarqube
+      optional: true
+    - trivy:scan
+  rules:
+    - if: $PUBLISH_JAR != "true"
+      when: never
+    - !reference [.protected_branches, rules]
+  variables:
+    NX_USER: $NX_DEPLOY_USER
+    NX_PASS: $NX_DEPLOY_PASS
+  script:
+    - *skip_final_on_release
+    - mvn $MAVEN_CLI deploy -DskipTests
+
+push:image:
+  stage: publish
+  image:
+    name: quay.io/skopeo/stable:v1.16.1
+    entrypoint: [""]
+  needs:
+    - version:check
+    - image:build
+    - job: sonarqube
+      optional: true
+    - trivy:scan
+  rules:
+    - !reference [.protected_branches, rules]
+  script:
+    - export APP_VERSION="${IMAGE_TAG%-$CI_COMMIT_SHORT_SHA}"
+    - *skip_final_on_release
+    - echo "$NX_DEPLOY_PASS" | skopeo login --tls-verify=false -u "$NX_DEPLOY_USER" --password-stdin "$REGISTRY"
+    - skopeo copy --dest-tls-verify=false docker-archive:image.tar "docker://$IMAGE_NAME:$IMAGE_TAG"
+    - skopeo logout "$REGISTRY"
